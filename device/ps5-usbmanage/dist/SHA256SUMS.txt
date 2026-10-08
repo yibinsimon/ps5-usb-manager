@@ -1,0 +1,1 @@
+cde7c7c6b0199e173c0d5588e00a78e3802fb682dbc8d49f81029af62e8d64db *usbmanage-v1.0.0.elf

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>USB 存储非正常拔出导致文件系统损坏 · 根因分析与方案设计</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --line:#e3e6ea; --text:#1b1f24; --muted:#667085;
+    --brand:#1f4e79; --brand-soft:#eef4fa; --ok:#1a7f37; --warn:#9a6700; --err:#b42318;
+    --code:#f2f4f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+  .hero{background:var(--panel);border-bottom:1px solid var(--line);padding:34px 24px 26px}
+  .hero .inner{max-width:960px;margin:0 auto}
+  .hero .kicker{color:var(--brand);font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;font-weight:600}
+  .hero h1{margin:8px 0 10px;font-size:26px;line-height:1.35;font-weight:650}
+  .hero p{margin:0;color:var(--muted)}
+  .hero .meta{margin-top:14px;font-size:12.5px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
+  main{max-width:960px;margin:0 auto;padding:28px 24px 60px}
+  section{margin-bottom:34px}
+  h2{font-size:17px;margin:0 0 14px;padding-left:11px;border-left:3px solid var(--brand);font-weight:650}
+  h3{font-size:14.5px;margin:20px 0 8px;color:#2b3440}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0;padding-left:22px}
+  li{margin:5px 0}
+  code{background:var(--code);border-radius:4px;padding:1px 5px;font:13px "Cascadia Mono",Consolas,monospace}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  .card + .card{margin-top:14px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--panel);
+    border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#fafbfc;color:var(--muted);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .pill{display:inline-block;font-size:12px;padding:2px 8px;border-radius:20px;margin-right:6px}
+  .pill.hi{background:#e6f4ea;color:var(--ok)}
+  .pill.mid{background:#fff4e5;color:var(--warn)}
+  .pill.lo{background:#fdecea;color:var(--err)}
+  .callout{border-left:3px solid var(--brand);background:var(--brand-soft);padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}
+  .layer{display:grid;grid-template-columns:120px 1fr;gap:12px;align-items:start;
+    padding:12px 0;border-bottom:1px dashed var(--line)}
+  .layer:last-child{border-bottom:none}
+  .layer .k{font-weight:650;color:var(--brand)}
+  .steps{counter-reset:s;list-style:none;padding-left:0}
+  .steps li{counter-increment:s;position:relative;padding-left:38px;margin:10px 0}
+  .steps li::before{content:counter(s);position:absolute;left:0;top:0;width:24px;height:24px;
+    background:var(--brand);color:#fff;border-radius:50%;font-size:12.5px;display:flex;
+    align-items:center;justify-content:center;font-weight:600}
+  footer{color:var(--muted);font-size:12.5px;text-align:center;padding:24px}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}.layer{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="hero">
+  <div class="inner">
+    <div class="kicker">根因分析与方案设计</div>
+    <h1>USB 存储非正常拔出导致文件系统损坏</h1>
+    <p>适用对象：越狱 PS5（固件 13.60）及其外接存储。外接盘基本都格成了 exFAT，磁盘格式的取舍见第三节。</p>
+    <div class="meta">
+      <span>编制：YibinSimon</span>
+      <span>版本：v1.0</span>
+      <span>项目：usbmanage</span>
+    </div>
+  </div>
+</div>
+
+<main>
+
+  <section>
+    <h2>一、现象与影响</h2>
+    <table>
+      <thead><tr><th>对象</th><th>现象</th><th>影响</th></tr></thead>
+      <tbody>
+        <tr><td>PS5（越狱 13.60）</td><td>找不到 U 盘弹出入口</td><td>直接拔盘后，再插上提示文件错误 / 需修复；媒体库出现损坏文件</td></tr>
+        <tr><td>磁盘</td><td>外接盘只能是 exFAT（FAT32 装不下超过 4 GB 的安装包）</td><td>无日志，非正常拔出后没有日志可回放，FAT 表与目录项可能停在中间状态</td></tr>
+      </tbody>
+    </table>
+    <div class="callout">
+      两者的共同点是主机这边缺了"卸载卷"这个动作。用户只能物理拔出，
+      文件系统就停在一个未落盘、未卸载的状态上。
+    </div>
+  </section>
+
+  <section>
+    <h2>二、根因分析</h2>
+
+    <div class="card">
+      <div class="layer">
+        <div class="k">OS 层</div>
+        <div>
+          <h3 style="margin-top:0">写缓存未落盘</h3>
+          Linux / FreeBSD 对块设备的写入先进页缓存，默认延迟回写（<code>dirty_expire_centisecs</code> 约 30 秒）。
+          物理拔出瞬间，缓存中"已返回成功、但尚未落盘"的数据与元数据一并丢失，形成半更新状态。
+        </div>
+      </div>
+      <div class="layer">
+        <div class="k">文件系统层</div>
+        <div>
+          <h3 style="margin-top:0">脏位与日志未回放</h3>
+          <ul>
+            <li><strong>NTFS</strong>：卷脏位（dirty bit）+ <code>$LogFile</code>。非正常卸载后脏位保持置位，
+              Windows 侧下次挂载会强制 chkdsk，即"每次插上都要修复"。</li>
+            <li><strong>ext4</strong>：有 journal，需日志回放，元数据可能处于中间状态。</li>
+            <li><strong>FAT32 / exFAT</strong>：无日志、结构简单，但 FAT 表与目录项同样可能损坏。</li>
+          </ul>
+          <p style="margin-bottom:0">带日志的文件系统，非正常卸载后必然要付一次校验的代价；不带日志的，是可能直接损坏。两种都不算安全。</p>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="k">平台层</div>
+        <div>
+          <h3 style="margin-top:0">没有卸载入口</h3>
+          <ul>
+            <li><strong>PS5</strong>：Orbis OS 对"媒体 U 盘"只挂载、不提供 UI 卸载（"扩展存储"硬盘的卸载入口用途不同）。
+              越狱后可通过 ELF payload 在主机侧执行卸载。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="k">使用模式层</div>
+        <div>
+          <h3 style="margin-top:0">跨设备轮换</h3>
+          "PC 写入 → 主机读取 → 直接拔"的轮换，使 PC 缓存与主机挂载产生的脏位叠加，
+          任何一次非正常拔出都会累积风险。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>三、外接盘为什么是 exFAT</h2>
+    <p>
+      PS5 对外接存储只认 FAT32 和 exFAT 两种。选 FAT32 会被 4 GB 的单文件上限卡死：
+      越狱之后装游戏、装应用，安装包单个往往几十 GB，一个字节都写不进去。
+      所以外接盘只能格成 exFAT，这是剩下的那一个选项，不是可挑可不挑的。
+    </p>
+    <div class="grid2">
+      <div class="card">
+        <h3 style="margin-top:0">exFAT：为可移动介质而生</h3>
+        <p>无日志、结构简单；主流播放设备对其非正常卸载容错较好，多数情况仅需一次轻量一致性修复。</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">没有日志的另一面</h3>
+        <p>非正常拔出之后没有日志可以回放，FAT 表和目录项可能直接停在中间状态。NTFS / ext4 则相反：带脏位和日志，非正常卸载后必然触发一遍校验，代价可预期但躲不掉。</p>
+      </div>
+    </div>
+    <div class="callout" style="margin-top:14px">
+      格式是被需求推着定下来的，不是随手能换的东西。它不制造错误，但它决定了出错之后的代价。
+      要压住损害，靠的还是拔盘前把卷卸掉这一步，格式本身替代不了。
+    </div>
+  </section>
+
+  <section>
+    <h2>四、方案矩阵</h2>
+    <table>
+      <thead>
+        <tr><th>方案</th><th>原理</th><th>PS5</th><th>侵入性</th><th>可靠性</th><th>成本</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>A. 主机软件卸载</strong>（本项目）</td>
+          <td>拔盘前 <code>sync</code> + <code>unmount</code></td>
+          <td>需越狱 + ELF payload</td>
+          <td><span class="pill mid">中</span></td>
+          <td><span class="pill hi">高</span></td>
+          <td>低</td>
+        </tr>
+        <tr>
+          <td><strong>B. 只读挂载</strong></td>
+          <td>不产生写与脏位</td>
+          <td>OS 仍 rw 挂载，需 patch</td>
+          <td><span class="pill mid">中</span></td>
+          <td><span class="pill hi">高</span>（媒体只读场景）</td>
+          <td>低</td>
+        </tr>
+        <tr>
+          <td><strong>C. 用 exFAT 而非 FAT32</strong>（既定前提）</td>
+          <td>无日志、结构简单、对非正常卸载的容错更好</td>
+          <td>原生支持</td>
+          <td><span class="pill hi">低</span></td>
+          <td><span class="pill mid">中高</span></td>
+          <td>需重格</td>
+        </tr>
+        <tr>
+          <td><strong>D. 硬件开关 / 写保护器</strong></td>
+          <td>物理切电 / 强制只读</td>
+          <td>通用</td>
+          <td><span class="pill hi">低</span></td>
+          <td><span class="pill mid">中</span></td>
+          <td>低</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:12px">
+      方案 A 是唯一能在主机侧真正把卷卸掉的软件手段，所以拿它当主方案。方案 D 是零软件成本的兜底。
+      方案 B、C 降低的是概率，方案 A 补的是动作缺口，两边是配合关系，不是二选一。
+    </p>
+  </section>
+
+  <section>
+    <h2>五、推荐组合与落地顺序</h2>
+    <ol class="steps">
+      <li><strong>立刻可用（本工具）</strong>：方案 A。PS5 走 payload（<code>sync + unmount</code>），
+        PC 走 Shell 弹出。</li>
+      <li><strong>低成本加固</strong>：方案 D。媒体盘配一个带独立电源开关的 USB Hub，
+        或对只读用途的盘加 USB 写保护器。</li>
+      <li><strong>格式确认</strong>：方案 C。盘得是 exFAT。FAT32 撑不住超过 4 GB 的安装包，
+        本身就是走不通的那条路；确认一下即可，不用当成待办。</li>
+      <li><strong>长期收敛</strong>：方案 B。媒体盘只读化，从根上避免主机侧产生脏数据。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>六、安全操作 SOP</h2>
+    <div class="card">
+      <ol class="steps" style="margin:0">
+        <li>停止播放，退出媒体应用（主机侧回到主菜单）。</li>
+        <li>运行 <code>python usbmanage.py eject ps5</code>，等待返回"已卸载 / 可安全拔出"。</li>
+        <li>卸载成功后再等 2 到 3 秒，然后物理拔出。</li>
+        <li>若提示卷被占用：先关闭播放器，或运行
+          <code>python usbmanage.py ps5-holders --mount /mnt/usb0</code> 查清占用者后重试。</li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <h2>七、平台能力核实（依据）</h2>
+    <ul>
+      <li>PS5 13.60 存在公开越狱链（Relapse，覆盖 7.00–13.60），提供 <strong>ELF loader</strong>
+        （浏览器 stage 端口 9020；etaHEN 内置 loader 端口 9021），可注入自定义 payload。</li>
+      <li>etaHEN 为 PS5 提供 toolbox / FTP(1337) / payload 菜单等能力，并有 SDK 支持自定义插件。</li>
+      <li>越狱环境下，payload 可在主机侧直接调用 <code>sync</code> / <code>unmount</code> 完成卸载。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>八、风险与合规</h2>
+    <ul>
+      <li>PS5 越狱环境：联网 / 登录 PSN 有<strong>账号封禁</strong>风险，且影响保修，建议离线使用。</li>
+      <li>本工具仅用于<strong>自有或获授权测试</strong>的设备；payload 注入能力请自行在合规前提下使用。</li>
+      <li>任何物理拔出都不保证百分之百安全；真正安全的前提是先卸载。</li>
+    </ul>
+  </section>
+
+</main>
+<footer>usbmanage · 根因分析与方案设计 · 本页为静态报告，可直接离线查看</footer>
+</body>
+</html>

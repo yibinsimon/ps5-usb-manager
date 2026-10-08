@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PS5 USB管理器 · usbmanage</title>
+<!-- 页签图标：server.py 从 web/icon.png 直接读文件返回（与 PS5 端同一份图）。
+     显式声明 /icon.png，老浏览器回落到 /favicon.ico，两条路由同一份字节。 -->
+<link rel="icon" type="image/png" href="/icon.png" />
+<link rel="apple-touch-icon" href="/icon.png" />
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --line:#e3e6ea; --text:#1b1f24;
+    --muted:#6b7280; --brand:#1f4e79; --brand-soft:#eaf1f8;
+    --ok:#1a7f37; --warn:#9a6700; --err:#b42318; --code:#f2f4f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:16px 24px;
+    display:flex;align-items:center;justify-content:space-between;gap:16px}
+  header h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.02em}
+  /* 应用图标：四角本身透明，不需要 border-radius；36px 是 96px 图的 2 倍余量 */
+  header .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  header .brand img.logo{display:block;width:36px;height:36px;flex:0 0 36px}
+  header h1 .en{font:11px/1 ui-monospace,Consolas,monospace;color:var(--muted);
+    border:1px solid var(--line);border-radius:4px;padding:2px 6px;margin-left:8px;vertical-align:2px}
+  header .sub{color:var(--muted);font-size:12px;margin-top:4px}
+  .wrap{max-width:1080px;margin:0 auto;padding:24px}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel);
+    color:var(--text);padding:8px 14px;border-radius:6px}
+  button:hover{border-color:#c9cfd6}
+  button.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  button.primary:hover{background:#1a4269}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px}
+  .card h2{margin:0 0 4px;font-size:14px;font-weight:600}
+  .card .hint{color:var(--muted);font-size:12px;margin-bottom:12px;word-break:break-all}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#c9cfd6;margin-right:6px}
+  .dot.on{background:var(--ok)} .dot.off{background:#c9cfd6}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500}
+  .log{margin-top:18px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
+  .log h2{margin:0 0 8px;font-size:14px}
+  pre{margin:0;background:var(--code);border-radius:6px;padding:12px;
+    font:12.5px/1.6 "Cascadia Mono",Consolas,monospace;white-space:pre-wrap;word-break:break-all;
+    max-height:320px;overflow:auto}
+  .tag{font-size:12px;border-radius:4px;padding:1px 6px;margin-left:6px}
+  .tag.ok{background:#e6f4ea;color:var(--ok)} .tag.err{background:#fdecea;color:var(--err)}
+  footer{color:var(--muted);font-size:12px;padding:20px 24px;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <img class="logo" src="/icon.png" alt="" width="36" height="36">
+    <div>
+      <h1>PS5 USB管理器<span class="en">usbmanage</span></h1>
+      <div class="sub">卸载前先 sync 落盘，再按卷卸载，并回读校验</div>
+    </div>
+  </div>
+  <button id="refresh">刷新状态</button>
+</header>
+
+<div class="wrap">
+  <div class="bar">
+    <button class="primary" data-eject="ps5">安全卸载 · PS5</button>
+    <button class="primary" data-eject="local">安全弹出 · 本机</button>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>PS5 · 管理器服务</h2>
+      <div class="hint" id="ps5-hint">—</div>
+      <div class="bar" style="margin:0 0 10px">
+        <button data-openui>在电视上打开界面</button>
+      </div>
+      <table><thead><tr><th>挂载点</th><th>文件系统</th><th>总容量</th><th>可用</th><th></th></tr></thead>
+        <tbody id="ps5-body"><tr><td colspan="5">—</td></tr></tbody></table>
+    </div>
+
+    <div class="card">
+      <h2>本机可移动磁盘</h2>
+      <div class="hint" id="local-hint">—</div>
+      <table><thead><tr><th>盘符</th><th>卷标</th><th>文件系统</th><th>容量</th></tr></thead>
+        <tbody id="local-body"><tr><td colspan="4">—</td></tr></tbody></table>
+    </div>
+  </div>
+
+  <div class="log">
+    <h2>执行日志</h2>
+    <pre id="log">等待操作…</pre>
+  </div>
+</div>
+
+<footer>本地工具，不上传任何数据。payload 注入能力需在合规前提下自行配置。</footer>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const log = (t) => { $("#log").textContent = t; };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmtBytes = (n) => {
+  const v = Number(n);
+  if (!isFinite(v) || v <= 0) return "—";
+  const u = ["B","KB","MB","GB","TB","PB"];
+  let i = 0, x = v;
+  while (x >= 1024 && i < u.length - 1) { x /= 1024; i++; }
+  return x.toFixed(i >= 3 ? 2 : 0) + " " + u[i];
+};
+
+async function refresh(){
+  log("正在读取状态…");
+  try{
+    const r = await fetch("/api/status", {cache:"no-store"});
+    const d = await r.json();
+
+    // PS5 · 管理器服务
+    const p5 = d.ps5 || {};
+    const verTxt = p5.version ? ` · v${p5.version}` : "";
+    $("#ps5-hint").innerHTML = `<span class="dot ${p5.online?"on":"off"}"></span>${p5.ip || "未配置 IP"}：${p5.online ? "PS5 USB管理器 在线"+verTxt : "PS5 USB管理器 未就绪"}` +
+      (p5.error ? `<br>${esc(p5.error)}` : "");
+    const pv = (p5.volumes || []);
+    $("#ps5-body").innerHTML = pv.length
+      ? pv.map(v=>`<tr>
+          <td>${esc(v.mount)}<div style="color:var(--muted);font-size:11px">${esc(v.device||"")}</div></td>
+          <td>${esc(v.fstype)}</td><td>${fmtBytes(v.total)}</td><td>${fmtBytes(v.free)}</td>
+          <td><button data-ps5-eject="${esc(v.mount)}">卸载</button></td></tr>`).join("")
+      : `<tr><td colspan="5">${p5.online ? "未发现可卸载的外接卷（只列 /mnt/usb*）" : "—"}</td></tr>`;
+
+    // Local
+    const lo = d.local || [];
+    $("#local-hint").textContent = d.local_error || (lo.length ? `发现 ${lo.length} 个可移动磁盘` : "无");
+    $("#local-body").innerHTML = lo.length
+      ? lo.map(x=>{ let s=x.size; if(s && /^\d+$/.test(s)) s=(Number(s)/1e9).toFixed(1)+" GB";
+          return `<tr><td>${esc(x.drive)}</td><td>${esc(x.label)}</td><td>${esc(x.fs)}</td><td>${esc(s)}</td></tr>`; }).join("")
+      : `<tr><td colspan="4">—</td></tr>`;
+
+    log("状态已更新。");
+  }catch(e){ log("读取失败：" + e); }
+}
+
+async function eject(target, mount){
+  let body = {target};
+  if(mount) body.mount = mount;
+  if(target === "local"){
+    const first = (document.querySelector("#local-body tr td")||{}).textContent;
+    if(!first || first === "—"){ log("本机未发现可移动磁盘。"); return; }
+    body.drive = first.trim();
+  }
+  log(`正在执行安全卸载（${target}${mount ? " · " + mount : ""}）…`);
+  try{
+    const r = await fetch("/api/eject", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    const d = await r.json();
+    const lines = [];
+    lines.push(`${target}${mount ? " · " + mount : ""}：${d.ok ? "成功" : "未成功"}`);
+    (d.steps||[]).forEach(s=>lines.push("  - " + s));
+    if(d.err) lines.push("  ! " + d.err);
+    log(lines.join("\n"));
+    refresh();
+  }catch(e){ log("执行失败：" + e); }
+}
+
+async function openUi(btn){
+  btn.disabled = true;
+  log("正在请求主机把界面弹到它自己的屏幕上…");
+  try{
+    const r = await fetch("/api/ps5/openui", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    const d = await r.json();
+    const lines = [];
+    lines.push(d.ok ? "已请求主机打开界面。" : ("未成功：" + (d.err || "未知错误")));
+    (d.steps||[]).forEach(s=>lines.push("  - " + s));
+    const g = d.diag;
+    if(g){
+      lines.push(`主机 PS5 USB管理器 ${g.version} · ${g.lan_ip}:${g.port}`);
+      lines.push(`界面自启 ${g.ui_autolaunch ? "开" : "关"}，已尝试 ${g.ui_attempts} 次`);
+      const rc = g.rc || {};
+      lines.push(`系统调用返回码 user_init=${rc.user_init} browser=${rc.browser} notify=${rc.notify}`);
+      if(rc.browser !== 0 || rc.notify !== 0){
+        lines.push("  ! 返回码非 0：这两个是主机给出的失败码，界面不会自动弹；");
+        lines.push("    但用手机/电脑打开 http://" + g.lan_ip + ":" + g.port + "/ 仍可正常使用。");
+      }
+    }else if((Array.isArray(d.diag_log) ? d.diag_log : []).length){
+      d.diag_log.forEach(s=>lines.push("  " + s));
+    }
+    log(lines.join("\n"));
+    refresh();
+  }catch(e){ log("请求失败：" + e); }
+  finally{ btn.disabled = false; }
+}
+
+$("#refresh").addEventListener("click", refresh);
+document.querySelectorAll("[data-eject]").forEach(b=>b.addEventListener("click", ()=>eject(b.dataset.eject)));
+document.querySelectorAll("[data-openui]").forEach(b=>b.addEventListener("click", ()=>openUi(b)));
+// PS5 卷列表是动态渲染的，用事件委托接住每行的「卸载」按钮
+$("#ps5-body").addEventListener("click", (e)=>{
+  const b = e.target.closest("[data-ps5-eject]");
+  if(b) eject("ps5", b.dataset.ps5Eject);
+});
+refresh();
+</script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+# ---- 本机配置：含内网 IP / 盘符，绝不入库 ----
+config.json
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+
+# ---- 工作区数据（WorkBuddy 项目记忆等），不随项目发布 ----
+.workbuddy/
+
+# ---- 已停止维护的 Android 端：文件保留在本地，不随本项目发布 ----
+android/
+
+# ---- 早期原型与第三方二进制，不随本项目发布 ----
+device/ps5-payload/
+device/payloads/
+
+# ---- 构建中间产物（由 build.sh / hosttest 生成，需要时重跑即可）----
+device/ps5-usbmanage/web/index_html.h
+device/ps5-usbmanage/web/icon_png.h
+device/ps5-usbmanage/usbmanage.elf
+device/ps5-usbmanage/*.o
+device/ps5-usbmanage/hosttest/test_host.exe
+device/ps5-usbmanage/hosttest/pure.inc
+device/ps5-usbmanage/hosttest/http/usbmanage-host.exe
+device/ps5-usbmanage/hosttest/http/*.log
+device/ps5-usbmanage/hosttest/http/*.pid
+device/ps5-usbmanage/hosttest/http/*.img
+device/ps5-usbmanage/hosttest/http/*.txt
+device/ps5-usbmanage/hosttest/http/*.out
+device/ps5-usbmanage/hosttest/http/*.hdr
+# 测试跑出来的通知副本与手工实验产物：每次运行都会重新生成，不入库
+device/ps5-usbmanage/hosttest/http/*.json
+device/ps5-usbmanage/hosttest/http/*.exe
+
+# ---- 重编号前的内部构建：留在本地备查，只发布当前版本 ----
+device/ps5-usbmanage/dist/_legacy/

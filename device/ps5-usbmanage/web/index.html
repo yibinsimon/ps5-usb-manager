@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PS5 USB Manager</title>
+<!-- 页签图标：由本服务自己提供（编在 elf 里，见 usbmanage.c 的 send_icon）。
+     显式声明 /icon.png，老浏览器回落到自动请求 /favicon.ico，两条路由同一份字节。 -->
+<link rel="icon" type="image/png" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
+<style>
+:root{color-scheme:dark light}
+*{box-sizing:border-box}
+body{margin:0;padding:22px 18px 40px;background:#0d1117;color:#e6edf3;
+ font:15px/1.65 -apple-system,"Segoe UI",Roboto,"Helvetica Neue","Microsoft YaHei",sans-serif}
+.wrap{max-width:760px;margin:0 auto}
+/* 页头：应用图标 + 标题。图标四角本身透明，不需要 border-radius */
+.hd{display:flex;gap:12px;align-items:flex-start}
+.hd .logo{display:block;flex:0 0 40px;width:40px;height:40px;margin-top:2px}
+.hd-t{min-width:0}
+h1{font-size:19px;font-weight:600;margin:0 0 6px}
+.sub{color:#8b949e;font-size:13px}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:16px 0}
+button{font:inherit;font-size:14px;padding:9px 16px;border-radius:8px;border:1px solid #30363d;
+ background:#21262d;color:#e6edf3;cursor:pointer;-webkit-appearance:none}
+button:hover:not(:disabled){background:#30363d}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.go{border-color:#b62324;background:#b62324;color:#fff;font-weight:600}
+button.go:hover:not(:disabled){background:#d93025;border-color:#d93025}
+button.warn{border-color:#9a6700;background:#5a3e00;color:#ffe1a0}
+button.warn:hover:not(:disabled){background:#7a5200}
+button.ghost{border-color:#30363d;background:transparent;color:#8b949e}
+button.ghost:hover:not(:disabled){background:#21262d;color:#e6edf3}
+.card{border:1px solid #30363d;border-radius:10px;padding:14px 16px;margin-bottom:10px;background:#161b22}
+.card.busy{opacity:.5}
+.card.locked{border-color:#3d3333;background:#12161b}
+.card.fail{border-color:#b62324;background:#1d1315}
+.mnt{font-size:16px;font-weight:600;font-family:ui-monospace,Consolas,"Courier New",monospace}
+/* 卷标：光看 /mnt/usb0 与 /dev/da0s1 分不清哪块是哪个，插两块更容易卸错 */
+.lbl{font-size:15px;font-weight:600;margin-top:5px;word-break:break-all}
+.lbl .k{color:#8b949e;font-size:12px;font-weight:400;margin-right:7px}
+.lbl.none{color:#8b949e;font-size:13px;font-weight:400}
+.meta{color:#8b949e;font-size:13px;margin:5px 0 11px}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;margin-left:8px;
+ background:#3d3333;color:#d2a8a3;border:1px solid #5a4040;vertical-align:2px}
+.mono{font-family:ui-monospace,Consolas,"Courier New",monospace}
+.empty{border:1px dashed #30363d;border-radius:10px;padding:30px 20px;text-align:center;color:#8b949e}
+/* 卡片内的即时反馈：卸载/解除的结果直接出现在被点的那张卡上 */
+.fb{margin-top:10px;padding:9px 12px;border-radius:8px;font-size:13px;word-break:break-all;display:none}
+.fb.ok{display:block;background:#12291c;border:1px solid #238636;color:#7ee787}
+.fb.err{display:block;background:#33161a;border:1px solid #b62324;color:#ff9b93}
+.fb.wait{display:block;background:#20262e;border:1px solid #30363d;color:#c9d1d9}
+/* 占用者列表 */
+.holders{margin-top:10px;font-size:13px}
+.holders .h{border:1px solid #30363d;border-radius:8px;padding:7px 10px;margin-bottom:6px;background:#10141b}
+.holders .h .c{font-family:ui-monospace,Consolas,"Courier New",monospace}
+.holders .h .p{color:#8b949e;word-break:break-all}
+.holders .h.skip{opacity:.65}
+.holders .why{color:#d2a8a3;font-size:12px}
+.hint{color:#e3c07b;font-size:12px;margin-top:8px}
+/* 顶部固定提示条（老 webkit 用 position:fixed，不依赖 sticky） */
+#msg{position:fixed;top:0;left:0;right:0;z-index:99;padding:10px 16px;
+ font-size:14px;display:none;word-break:break-all;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+#msg.ok{display:block;background:#12291c;border-bottom:2px solid #238636;color:#7ee787}
+#msg.err{display:block;background:#33161a;border-bottom:2px solid #b62324;color:#ff9b93}
+#msg.wait{display:block;background:#20262e;border-bottom:2px solid #30363d;color:#c9d1d9}
+hr{border:0;border-top:1px solid #21262d;margin:22px 0 14px}
+footer{color:#6e7681;font-size:12px;line-height:1.9}
+.warn{background:#2a2113;border:1px solid #6b5320;color:#e3c07b;padding:9px 13px;
+ border-radius:8px;font-size:13px;margin-bottom:14px}
+label.t{color:#8b949e;font-size:13px;cursor:pointer;margin-left:auto;user-select:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd">
+    <!-- 图标自带约 4% 的透明外边距与约 20% 圆角，四角本来就是透明的，
+         所以这里不需要 border-radius；40px 是 96px 图的 2 倍余量。 -->
+    <img class="logo" src="/icon.png" alt="" width="40" height="40">
+    <div class="hd-t">
+      <h1 id="appname"></h1>
+      <div class="sub" id="tagline"></div>
+    </div>
+  </div>
+
+  <div id="preview"></div>
+  <div id="msg"></div>
+
+  <div class="bar">
+    <button id="refresh"></button>
+    <button id="shutdown" class="ghost"></button>
+    <span class="sub" id="status"></span>
+    <label class="t"><input type="checkbox" id="diag"> <span id="lblDiag"></span></label>
+  </div>
+
+  <div id="list"><div class="empty"></div></div>
+
+  <hr>
+  <footer>
+    <span id="appnameFoot"></span> <span id="ver">?</span> · <span id="hostLbl"></span>
+    <span class="mono" id="host"></span><br>
+    <span id="footA"></span><br>
+    <span id="footB"></span><br>
+    <span id="footC"></span>
+  </footer>
+</div>
+
+<script>
+/*
+ * ===================== 界面语言 =====================
+ *
+ * 约定：**系统语言是中文就上中文界面，简体走简体、繁体走繁体；其余一切
+ * 语言（含日、韩、欧语）走英文**。
+ *
+ * 判定顺序：
+ *   1) 页面地址上的 ?lang=zh-Hans|zh-Hant|en —— 只作调试/自动化用，优先级最高；
+ *   2) navigator.language（老 webkit 上叫 userLanguage），它由主机系统语言决定。
+ *      zh / zh-CN / zh-Hans 走简体；zh-TW / zh-HK / zh-MO / zh-Hant 走繁体；
+ *      其余走英文；
+ *   3) 都取不到就英文。
+ *
+ * 页面上取不到 navigator 时（比如离机测试的极简 DOM）不能报错，直接落到
+ * 英文——所以下面所有取值都带 typeof 兜底。
+ */
+var L = {
+  zh: {
+    title:'PS5 USB管理器',
+    tagline:'先 sync 落盘，再 unmount —— 解决"直接拔 U 盘导致下次插上提示文件损坏"的问题。',
+    refresh:'刷新列表',
+    shutdown:'关闭服务',
+    diag:'显示内部存储（只读）',
+    loading:'正在读取…',
+    reading:'读取中…',
+    noHost:'未连接到主机。<br>本页必须由主机上的服务提供：请在浏览器打开 '+
+           '<b>http://&lt;主机IP&gt;:9100/</b><br>'+
+           '（直接把本文件当本地网页打开，读不到数据是正常的）',
+    noVols:'当前没有可卸载的外接 USB 存储。<br>插上 U 盘后点「刷新列表」。',
+    countVols:'共 %s 个可卸载卷',
+    countMounts:'共 %s 个挂载点（只读视图%s）',
+    truncated:'，已截断显示 %s 条',
+    internalTag:'内部存储 · 禁止卸载',
+    labelKey:'卷标',
+    labelNone:'（这块盘没有卷标）',
+    used:'已用',
+    free:'剩余',
+    eject:'安全弹出 %s',
+    notEjectable:'不可卸载',
+    inLabel:'（卷标 %s）',
+    inNoLabel:'（无卷标）',
+    confirmEject:'确认卸载 %s%s ？\n\n请先关闭正在读写这个盘的节目/应用，卸载过程中不要拔盘。',
+    whoHolds:'谁在占用：',
+    whoHoldsNone:'谁在占用：没有进程打开这块盘上的文件',
+    selfTag:'本服务',
+    release:'解除占用并卸载',
+    unmounting:'正在卸载…',
+    releasing:'正在解除占用…',
+    syncHint:'正在 sync 落盘并卸载 …',
+    releaseHint:'正在终止占用进程并重试卸载 …',
+    reqFailed:'请求失败：%s',
+    ejectFailed:'卸载失败 %s：%s',
+    ejectDone:'已卸载，现在可以安全拔出了。',
+    ejectDoneSay:'已卸载 %s，可以安全拔出。',
+    confirmRelease:'解除占用会终止正在使用这个盘的程序，并卸掉系统沙箱对这块盘的挂接\n'+
+                   '（播放器会关闭文件、可能丢失未保存的播放进度）。\n\n'+
+                   '确认解除 %s 的占用并卸载？',
+    releaseFailed:'解除占用失败 %s：%s',
+    releaseDone:'已解除占用并卸载，现在可以安全拔出了。',
+    releaseDoneSay:'已解除占用并卸载 %s。',
+    killedN:'终止 %s 个进程',
+    childN:'卸掉 %s 个系统挂接',
+    stillHolds:'以下进程在解除动作后仍占用着这块盘：',
+    releaseNoUnmount:'解除占用后仍未卸载成功，见下方仍在占用的进程。',
+    releaseSayFail:'解除占用 %s 后仍未卸载成功。',
+    unknownErr:'未知错误',
+    confirmShutdown:'关闭 %s 服务？\n\n主机上的服务进程会彻底退出，本页随即失效。\n'+
+                    '以后再要用，需要从越狱工具箱重新加载 payload。',
+    closing:'正在关闭…',
+    shutdownFailed:'关闭失败：%s',
+    stopped:'服务已关闭。%s',
+    notLoaded:'可从越狱工具箱重新加载',
+    previewWarn:'这是页面文件的本地预览，未连接主机，列表为空属正常。'+
+                '实际使用时请在浏览器打开 <b>http://&lt;主机IP&gt;:9100/</b>。',
+    hostLbl:'本页地址',
+    /* 括号与分隔符本身也是语言相关的：英文用半角括号、半角逗号，中文用全角 */
+    freeWrap:'（%s）',
+    extraWrap:'（%s）',
+    listSep:'、',
+    footA:'只能卸载 /mnt/usb<数字>；/mnt/ext* 是主机内部存储，已硬性拒绝。',
+    footB:'重复加载同一个 payload 只会把你带回本页（不会起第二个进程）；要换版本，先点「关闭服务」再重新加载。',
+    footC:'仅用于自有或获授权测试的设备。'
+  },
+  'zh-Hant': {
+    title:'PS5 USB管理器',
+    tagline:'先 sync 落盤，再 unmount —— 解決「直接拔 U 盤導致下次插上提示檔案損毀」的問題。',
+    refresh:'重新整理清單',
+    shutdown:'關閉服務',
+    diag:'顯示內部儲存（唯讀）',
+    loading:'正在讀取…',
+    reading:'讀取中…',
+    noHost:'未連線到主機。<br>本頁必須由主機上的服務提供：請在瀏覽器開啟 '+
+           '<b>http://&lt;主機IP&gt;:9100/</b><br>'+
+           '（直接把本檔案當本機網頁開啟，讀不到資料是正常的）',
+    noVols:'目前沒有可卸載的外接 USB 儲存。<br>插上 U 盤後點「重新整理清單」。',
+    countVols:'共 %s 個可卸載卷',
+    countMounts:'共 %s 個掛載點（唯讀檢視%s）',
+    truncated:'，已截斷顯示 %s 條',
+    internalTag:'內部儲存 · 禁止卸載',
+    labelKey:'卷標',
+    labelNone:'（這顆磁碟沒有卷標）',
+    used:'已用',
+    free:'剩餘',
+    eject:'安全彈出 %s',
+    notEjectable:'不可卸載',
+    inLabel:'（卷標 %s）',
+    inNoLabel:'（無卷標）',
+    confirmEject:'確認卸載 %s%s ？\n\n請先關閉正在讀寫這顆磁碟的節目／應用程式，卸載過程中不要拔盤。',
+    whoHolds:'誰在佔用：',
+    whoHoldsNone:'誰在佔用：沒有處理程序開啟這顆磁碟上的檔案',
+    selfTag:'本服務',
+    release:'解除佔用並卸載',
+    unmounting:'正在卸載…',
+    releasing:'正在解除佔用…',
+    syncHint:'正在 sync 落盤並卸載 …',
+    releaseHint:'正在終止佔用處理程序並重試卸載 …',
+    reqFailed:'請求失敗：%s',
+    ejectFailed:'卸載失敗 %s：%s',
+    ejectDone:'已卸載，現在可以安全拔出了。',
+    ejectDoneSay:'已卸載 %s，可以安全拔出。',
+    confirmRelease:'解除佔用會終止正在使用這顆磁碟的程式，並卸掉系統沙盒對這顆磁碟的掛接\n'+
+                   '（播放器會關閉檔案、可能遺失未儲存的播放進度）。\n\n'+
+                   '確認解除 %s 的佔用並卸載？',
+    releaseFailed:'解除佔用失敗 %s：%s',
+    releaseDone:'已解除佔用並卸載，現在可以安全拔出了。',
+    releaseDoneSay:'已解除佔用並卸載 %s。',
+    killedN:'終止 %s 個處理程序',
+    childN:'卸掉 %s 個系統掛接',
+    stillHolds:'以下處理程序在解除動作後仍佔用著這顆磁碟：',
+    releaseNoUnmount:'解除佔用後仍未卸載成功，見下方仍在佔用的處理程序。',
+    releaseSayFail:'解除佔用 %s 後仍未卸載成功。',
+    unknownErr:'未知錯誤',
+    confirmShutdown:'關閉 %s 服務？\n\n主機上的服務處理程序會徹底結束，本頁隨即失效。\n'+
+                    '以後還要用，需要從越獄工具箱重新載入 payload。',
+    closing:'正在關閉…',
+    shutdownFailed:'關閉失敗：%s',
+    stopped:'服務已關閉。%s',
+    notLoaded:'可從越獄工具箱重新載入',
+    previewWarn:'這是頁面檔案的本機預覽，未連線主機，清單為空屬正常。'+
+                '實際使用時請在瀏覽器開啟 <b>http://&lt;主機IP&gt;:9100/</b>。',
+    hostLbl:'本頁位址',
+    freeWrap:'（%s）',
+    extraWrap:'（%s）',
+    listSep:'、',
+    footA:'只能卸載 /mnt/usb<數字>；/mnt/ext* 是主機內部儲存，已硬性拒絕。',
+    footB:'重複載入同一個 payload 只會把你帶回本頁（不會起第二個處理程序）；要換版本，先點「關閉服務」再重新載入。',
+    footC:'僅用於自有或獲授權測試的裝置。'
+  },
+  en: {
+    title:'PS5 USB Manager',
+    tagline:'Sync first, then unmount — so pulling a drive out no longer corrupts it the next time you plug it in.',
+    refresh:'Refresh',
+    shutdown:'Stop service',
+    diag:'Show internal storage (read-only)',
+    loading:'Loading…',
+    reading:'Loading…',
+    noHost:'Not connected to the console.<br>This page has to be served by the tool running on the console. Open '+
+           '<b>http://&lt;console-ip&gt;:9100/</b> in a browser.<br>'+
+           '(Opening this file directly will always show an empty list.)',
+    noVols:'No removable USB storage is attached.<br>Plug a drive in, then press Refresh.',
+    countVols:'%s removable volume(s)',
+    countMounts:'%s mount point(s) in the read-only view%s',
+    truncated:', truncated to %s',
+    internalTag:'internal storage · never unmounted',
+    labelKey:'Label',
+    labelNone:'(this volume has no label)',
+    used:'used',
+    free:'free',
+    eject:'Eject %s',
+    notEjectable:'not ejectable',
+    inLabel:' (label: %s)',
+    inNoLabel:' (no label)',
+    confirmEject:'Unmount %s%s?\n\nClose any app that is reading or writing this drive first, and do not unplug it while it is unmounting.',
+    whoHolds:'Who is holding it:',
+    whoHoldsNone:'Who is holding it: no process has a file open on this drive',
+    selfTag:'this service',
+    release:'Release and unmount',
+    unmounting:'Unmounting…',
+    releasing:'Releasing…',
+    syncHint:'Syncing and unmounting…',
+    releaseHint:'Terminating the holders and retrying the unmount…',
+    reqFailed:'request failed: %s',
+    ejectFailed:'unmount failed %s: %s',
+    ejectDone:'Unmounted — it is now safe to unplug.',
+    ejectDoneSay:'Unmounted %s — safe to unplug.',
+    confirmRelease:'Releasing will terminate the programs using this drive and drop the system sandbox mounts for it\n'+
+                   '(players will close their files and may lose unsaved playback position).\n\n'+
+                   'Release and unmount %s?',
+    releaseFailed:'release failed %s: %s',
+    releaseDone:'Released and unmounted — it is now safe to unplug.',
+    releaseDoneSay:'Released and unmounted %s.',
+    killedN:'%s process(es) terminated',
+    childN:'%s system mount(s) released',
+    stillHolds:'These processes still hold the drive after the release:',
+    releaseNoUnmount:'Still not unmounted after releasing — see the processes below.',
+    releaseSayFail:'releasing %s did not unmount it.',
+    unknownErr:'unknown error',
+    confirmShutdown:'Stop the %s service?\n\nThe service process on the console will exit for good and this page will stop working.\n'+
+                    'To use it again, reload the payload from the jailbreak toolbox.',
+    closing:'Stopping…',
+    shutdownFailed:'stop failed: %s',
+    stopped:'Service stopped. %s',
+    notLoaded:'reload it from the jailbreak toolbox',
+    previewWarn:'This is a local preview of the page file with no console connection, so an empty list is expected. '+
+                'In real use, open <b>http://&lt;console-ip&gt;:9100/</b> in a browser.',
+    hostLbl:'page address',
+    freeWrap:' (%s)',
+    extraWrap:' (%s)',
+    listSep:', ',
+    footA:'Only /mnt/usb<number> can be unmounted; /mnt/ext* is console internal storage and is rejected outright.',
+    footB:'Loading the same payload again just brings you back to this page (no second process). To switch builds, press Stop service first, then load again.',
+    footC:'For use on your own or explicitly authorised devices only.'
+  }
+};
+
+/* 一个语言标记属于哪一档。返回 L 表里的键：'zh' / 'zh-Hant' / 'en'。 */
+function langTag(s){
+  s=String(s||'').toLowerCase().replace(/_/g,'-');
+  if(s.indexOf('zh')!==0)return 'en';
+  if(s==='zh')return 'zh';                       /* 光秃秃的 zh：按简体走 */
+  if(!/^zh[-]/.test(s))return 'en';              /* zhuang 之类前缀相同词 */
+  if(/^zh-(hant|tw|hk|mo)/.test(s))return 'zh-Hant';
+  return 'zh';                                   /* zh-cn / zh-hans / 其它地区 */
+}
+function detectLang(){
+  var q='';
+  try{ if(document.location&&document.location.search)q=document.location.search; }catch(e){}
+  var m=/[?&]lang=([A-Za-z0-9_-]+)/.exec(q);
+  if(m)return langTag(m[1]);
+  var n='';
+  try{
+    if(typeof navigator!=='undefined'&&navigator){
+      n=navigator.language||navigator.userLanguage||
+        (navigator.languages&&navigator.languages[0])||'';
+    }
+  }catch(e){}
+  return langTag(n);
+}
+var lang=detectLang();
+/* 取词。缺词时回落英文，再缺就原样吐 key —— 便于一眼看出漏翻。 */
+function t(k){
+  var d=L[lang]||L.en;
+  if(d[k]!==undefined)return d[k];
+  if(L.en[k]!==undefined)return L.en[k];
+  return k;
+}
+/* 带参数的取词：%s 按顺序替换 */
+function f(k,a,b){
+  var s=t(k),i=0,args=[a,b];
+  return s.replace(/%s/g,function(){var v=args[i++];return (v===undefined||v===null)?'':String(v);});
+}
+
+/* 标题与静态文案。都带 id，由这里统一填，避免两处维护。 */
+function applyText(){
+  var el=id('appname'); if(el)el.textContent=t('title');
+  el=id('tagline'); if(el)el.textContent=t('tagline');
+  el=id('refresh'); if(el)el.textContent=t('refresh');
+  el=id('shutdown'); if(el)el.textContent=t('shutdown');
+  el=id('lblDiag'); if(el)el.textContent=t('diag');
+  el=id('appnameFoot'); if(el)el.textContent=t('title');
+  el=id('hostLbl'); if(el)el.textContent=t('hostLbl');
+  el=id('footA'); if(el)el.textContent=t('footA');
+  el=id('footB'); if(el)el.textContent=t('footB');
+  el=id('footC'); if(el)el.textContent=t('footC');
+  try{ document.title=t('title'); }catch(e){}
+  try{ if(document.documentElement)document.documentElement.lang=(lang==='en'?'en':(lang==='zh-Hant'?'zh-Hant':'zh-CN')); }catch(e){}
+}
+
+function id(x){return document.getElementById(x)}
+function human(b){
+  if(b===null||b===undefined||b==='')return '?';
+  b=Number(b); if(!isFinite(b))return '?';
+  var u=['B','KB','MB','GB','TB'],i=0;
+  while(b>=1024&&i<u.length-1){b=b/1024;i++}
+  return (i?b.toFixed(1):b)+' '+u[i];
+}
+function esc(s){
+  return String(s===null||s===undefined?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+  });
+}
+/* 顶部固定提示条：无论滚到哪都看得见，不会像早期版本那样淹没在卡片堆里 */
+function say(kind,text){
+  var m=id('msg');
+  m.className=kind?('msg '+kind):'msg';
+  m.textContent=text;
+  /* 提示条是 position:fixed，会盖住页面顶部的标题与说明。
+     按它的实际高度给 body 让出空间，收起时还原。 */
+  document.body.style.paddingTop=(kind?((m.offsetHeight||0)+'px'):'');
+  if(kind==='ok'){setTimeout(function(){
+    m.className='msg';document.body.style.paddingTop='';
+  },7000)}
+  window.scrollTo(0,0);
+}
+function get(url,cb){
+  var x=new XMLHttpRequest();
+  x.open('GET',url,true);
+  x.setRequestHeader('Cache-Control','no-cache');
+  /* 显式声明只要 JSON：主机对浏览器导航请求（Accept 含 text/html）会把
+     /list、/eject、/shutdown 302 到选择页，声明之后本页的 XHR 不受影响。 */
+  x.setRequestHeader('Accept','application/json');
+  /* 自己是谁。/shutdown 这类"有副作用"的端点要求带这个头——从局域网里的
+     电脑打开本页点「关闭服务」时才放行；网页里的 <img src>、地址栏回车都
+     带不上自定义头，因此拿不到这个能力。
+     注意这是协议常量，跟界面显示名无关，别跟着改名一起动。 */
+  x.setRequestHeader('X-Requested-With','usbmanage');
+  x.onreadystatechange=function(){
+    if(x.readyState!==4)return;
+    var d=null;
+    try{d=JSON.parse(x.responseText)}catch(e){}
+    if(x.status>=200&&x.status<300){cb(null,d)}else{cb(new Error('HTTP '+x.status+' '+(x.responseText||'').slice(0,160)))}
+  };
+  try{x.send()}catch(e){cb(e)}
+}
+/* 找到某张卡里的反馈容器（懒创建），把结果写进去 */
+function cardSay(mount,kind,text){
+  var card=document.querySelector('div[data-mount="'+mount+'"]');
+  if(!card)return;
+  var f=card.querySelector('.fb');
+  if(!f){
+    f=document.createElement('div');
+    f.className='fb';
+    card.appendChild(f);
+  }
+  f.className='fb '+kind;
+  f.textContent=text;
+}
+
+/* 卷标：由 /list 的 label 字段来（主机侧直接读设备引导扇区解析出的）。
+ * 额外存一份到 labels[]，是因为 load() 会整表重建，确认框里还要用它。 */
+var labels={};
+
+/* 服务已被关掉（点过「关闭服务」）。此后本页不再发任何请求。 */
+var dead=false;
+
+function load(){
+  var box=id('list'),st=id('status'),all=id('diag').checked;
+  if(dead)return;
+  st.textContent=t('reading');
+  get('/list'+(all?'?all=1':''),function(err,d){
+    if(err){
+      st.textContent='';
+      box.innerHTML='<div class="empty">'+t('noHost')+
+        '<br><span style="font-size:12px">'+esc(err.message)+'</span></div>';
+      return;
+    }
+    var v=(d&&d.volumes)||[];
+    if(!all){
+      st.textContent=v.length?f('countVols',v.length):'';
+      if(!v.length){
+        box.innerHTML='<div class="empty">'+t('noVols')+'</div>';
+        return;
+      }
+    }else{
+      var cnt=(d&&d.count!==undefined?d.count:v.length);
+      var tr=(d&&d.truncated)?f('truncated',(d.shown!==undefined?d.shown:v.length)):'';
+      st.textContent=f('countMounts',cnt,tr);
+    }
+    var html='';
+    for(var i=0;i<v.length;i++){
+      var x=v[i],ok=!!x.ejectable,lab=x.label||'';
+      labels[x.mount]=lab;
+      html+='<div class="card'+(ok?'':' locked')+'" data-mount="'+esc(x.mount)+'">'+
+        '<div class="mnt">'+esc(x.mount)+(ok?'':'<span class="tag">'+t('internalTag')+'</span>')+'</div>'+
+        /* 卷标只对外接盘有（主机侧也只对外接盘去读）。没有就明说"没有"，
+           不显示空行，也不拿设备名当卷标糊弄。 */
+        (ok?(lab?('<div class="lbl"><span class="k">'+t('labelKey')+'</span>'+esc(lab)+'</div>')
+              :'<div class="lbl none">'+t('labelNone')+'</div>'):'')+
+        '<div class="meta">'+esc(x.fstype)+' · '+esc(x.device)+
+        ' · '+t('used')+' '+human(x.total-x.free)+' / '+human(x.total)+
+        ' '+f('freeWrap',t('free')+' '+human(x.free))+'</div>';
+      if(ok){
+        html+='<button class="go" data-eject="'+esc(x.mount)+'">'+f('eject',esc(x.mount))+'</button>';
+      }else{
+        html+='<button disabled>'+t('notEjectable')+'</button>';
+      }
+      html+='</div>';
+    }
+    box.innerHTML=html;
+    applyPending();
+  });
+}
+
+/* 把 /eject 失败返回的占用者名单渲染到卡片里，并给出「解除占用」按钮。
+ * holders 为空（内核不放行 fd 表查询，或占用是无主的沙箱挂接）时
+ * 照样给出按钮——/release 会自动走「卸沙箱挂接 + 强制卸载」兜底。
+ * noBtn=true 时只列名单不加按钮（release 后展示残留占用者用）。 */
+function renderHolders(card,holders,hint,noBtn){
+  var wrap=document.createElement('div');
+  wrap.className='holders';
+  var hd=document.createElement('div');
+  hd.className='sub';
+  hd.textContent=holders.length?t('whoHolds'):t('whoHoldsNone');
+  wrap.appendChild(hd);
+  var i;
+  for(i=0;i<holders.length;i++){
+    var h=holders[i];
+    var d=document.createElement('div');
+    d.className='h'+(h.killable===false?' skip':'');
+    d.innerHTML='<div class="c">pid '+esc(h.pid)+' · '+esc(h.comm)+
+      (h.kind?(' · <span class="mono">'+esc(h.kind)+'</span>'):'')+
+      (h.self?' · <span class="why">'+t('selfTag')+'</span>':'')+'</div>'+
+      '<div class="p">'+esc(h.path)+'</div>'+
+      (h.why?('<div class="why">'+esc(h.why)+'</div>'):'');
+    wrap.appendChild(d);
+  }
+  if(hint){var hi=document.createElement('div');hi.className='hint';hi.textContent=hint;wrap.appendChild(hi)}
+  card.appendChild(wrap);
+
+  if(noBtn)return;
+  var b=document.createElement('button');
+  b.className='warn';
+  b.style.marginTop='10px';
+  b.textContent=t('release');
+  b.setAttribute('data-release',card.getAttribute('data-mount'));
+  card.appendChild(b);
+}
+
+/* 就地反馈必须活过 load() 的整表重建。
+ * 一个坑：renderHolders() 直接 append 到卡片上，紧接着调 load()，
+ * load() 里 box.innerHTML=html 把这颗刚插进去的按钮连同占用者名单一起冲掉
+ * ——于是页面上只有顶部提示条喊着"点解除占用并卸载"，按钮却永远不出现。
+ * 现在把结果记进 pending，load() 每次重绘后由 applyPending() 重新挂回卡片。 */
+var pending={};
+function clearPending(){pending={}}
+function applyPending(){
+  for(var m in pending){
+    if(!Object.prototype.hasOwnProperty.call(pending,m))continue;
+    var p=pending[m];
+    var card=document.querySelector('div[data-mount="'+m+'"]');
+    if(!card)continue;
+    if(p.kind==='err')card.className='card fail';
+    cardSay(m,p.kind,p.text);
+    if(p.list)renderHolders(card,p.holders||[],p.hint||'',p.noBtn);
+  }
+}
+
+function doEject(btn){
+  var mount=btn.getAttribute('data-eject');
+  /* 卷标必须出现在确认框里：插两块盘时，/mnt/usb0 与 /mnt/usb1 光看编号
+     根本分不清哪块是哪个，而"卸错盘"正是这个工具最不能犯的错。 */
+  var lab=labels[mount]||'';
+  if(!confirm(f('confirmEject',mount,lab?f('inLabel',lab):t('inNoLabel'))))return;
+  btn.disabled=true;
+  btn.textContent=t('unmounting');
+  cardSay(mount,'wait',t('syncHint'));
+  get('/eject?mount='+encodeURIComponent(mount),function(err,d){
+    btn.disabled=false;
+    btn.textContent=f('eject',mount);
+    if(err){
+      pending[mount]={kind:'err',text:f('reqFailed',err.message)};
+      say('err',f('ejectFailed',mount,err.message));
+    }
+    else if(d&&d.ok){
+      /* 卸载成功的盘会从列表里消失，卡片自然没了；留着 pending 只为
+         万一它还在列表里时仍能看到"已卸载"的回执。 */
+      pending[mount]={kind:'ok',text:t('ejectDone')};
+      say('ok',f('ejectDoneSay',(d.mount||mount)));
+    }
+    else{
+      var msg=(d&&d.msg)||t('unknownErr');
+      /* 无论占用者查没查到，都就地给出「解除占用并卸载」入口 */
+      pending[mount]={kind:'err',text:msg,list:true,
+                      holders:(d&&d.holders)||[],hint:(d&&d.hint)||'',noBtn:false};
+      say('err',f('ejectFailed',mount,msg));
+    }
+    load();
+  });
+}
+
+/* 解除占用：终止占用进程、卸掉沙箱挂接，然后重试卸载（常规卸不掉自动补 force） */
+function doRelease(btn){
+  var mount=btn.getAttribute('data-release');
+  if(!confirm(f('confirmRelease',mount)))return;
+  btn.disabled=true;
+  btn.textContent=t('releasing');
+  cardSay(mount,'wait',t('releaseHint'));
+  get('/release?mount='+encodeURIComponent(mount)+'&confirm=1',function(err,d){
+    btn.disabled=false;
+    btn.textContent=t('release');
+    if(err){
+      pending[mount]={kind:'err',text:f('reqFailed',err.message)};
+      say('err',f('releaseFailed',mount,err.message));
+    }
+    else if(d&&d.unmounted){
+      var extra=[];
+      if(d.killed&&d.killed.length)extra.push(f('killedN',d.killed.length));
+      if(d.child_released_count)extra.push(f('childN',d.child_released_count));
+      var m=t('releaseDone')+(extra.length?f('extraWrap',extra.join(t('listSep'))):'');
+      pending[mount]={kind:'ok',text:m};
+      say('ok',f('releaseDoneSay',(d.mount||mount)));
+    }
+    else if(d&&d.msg){
+      /* 解除之后仍失败：把"仍在占用"的进程就地列出来，并保留重试按钮
+         （用户可能先关掉程序再点一次）。 */
+      pending[mount]={kind:'err',text:d.msg,list:true,
+                      holders:(d&&d.still)||[],
+                      hint:(d&&d.still&&d.still.length)?t('stillHolds'):'',
+                      noBtn:false};
+      say('err',f('releaseFailed',mount,d.msg));
+    }
+    else{
+      pending[mount]={kind:'err',text:t('releaseNoUnmount'),
+                      list:true,holders:(d&&d.still)||[],
+                      hint:(d&&d.still&&d.still.length)?t('stillHolds'):'',
+                      noBtn:false};
+      say('err',f('releaseSayFail',mount));
+    }
+    load();
+  });
+}
+
+document.addEventListener('click',function(ev){
+  var t2=ev.target||ev.srcElement;
+  while(t2&&t2!==document&&!(t2.getAttribute&&(t2.getAttribute('data-eject')||t2.getAttribute('data-release')))){t2=t2.parentNode}
+  if(t2&&t2!==document&&t2.getAttribute){
+    if(t2.getAttribute('data-eject')&&!t2.disabled)doEject(t2);
+    else if(t2.getAttribute('data-release')&&!t2.disabled)doRelease(t2);
+  }
+},false);
+
+/* 手动刷新 = 回到干净状态：清掉提示条与就地反馈 */
+id('refresh').onclick=function(){
+  if(dead)return;
+  id('msg').className='msg';document.body.style.paddingTop='';clearPending();load();
+};
+id('diag').onclick=function(){if(!dead)load()};
+
+/* 「关闭服务」：让主机上的进程彻底退出（不是停服务、不是休眠）。
+ * 以前只能靠越狱工具箱的进程管理杀，或者重启主机；不关掉的话，
+ * 重复加载 payload 只会"激活旧实例"，新版本永远上不来。
+ * 服务端只放行两种来源：本机回环，或带 X-Requested-With: usbmanage 的
+ * 页面请求——本页的 XHR 带这个头，所以在电脑上打开这一页点也有效。 */
+function die(text){
+  dead=true;
+  id('list').innerHTML='<div class="empty">'+esc(text)+'</div>';
+  id('status').textContent='';
+  id('refresh').disabled=true;
+  id('diag').disabled=true;
+  id('shutdown').disabled=true;
+  say('err',text);
+}
+id('shutdown').onclick=function(){
+  if(dead)return;
+  if(!confirm(f('confirmShutdown',t('title'))))return;
+  var b=id('shutdown');
+  b.disabled=true;
+  b.textContent=t('closing');
+  get('/shutdown',function(err,d){
+    if(err){
+      b.disabled=false;
+      b.textContent=t('shutdown');
+      say('err',f('shutdownFailed',err.message));
+      return;
+    }
+    die(f('stopped',((d&&d.msg)||t('notLoaded'))));
+  });
+};
+
+applyText();
+/* 静态 HTML 里那块空 div 没有文案，先把"正在读取"填上，免得首屏空白 */
+id('list').innerHTML='<div class="empty">'+t('loading')+'</div>';
+get('/version',function(err,d){
+  if(!err&&d&&d.version)id('ver').textContent='v'+d.version;
+});
+if(document.location&&document.location.host)id('host').textContent=document.location.host;
+if(document.location&&document.location.protocol==='file:')
+  id('preview').innerHTML='<div class="warn">'+t('previewWarn')+'</div>';
+load();
+</script>
+</body>
+</html>

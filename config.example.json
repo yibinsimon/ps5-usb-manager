@@ -1,0 +1,12 @@
+{
+  "ps5": {
+    "ip": "192.168.1.100",
+    "toolbox_port": 7788,
+    "usbmanage_port": 9100,
+    "loader_port": 9021,
+    "payload": "device/ps5-usbmanage/usbmanage.elf"
+  },
+  "local": {
+    "drives": ["E:"]
+  }
+}
